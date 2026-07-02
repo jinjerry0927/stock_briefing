@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getQuote } from "@/lib/stocks";
+import { getCachedQuote } from "@/lib/market-data";
 
 export async function GET(
   _req: Request,
@@ -9,11 +9,13 @@ export async function GET(
   if (market !== "KR" && market !== "US") {
     return NextResponse.json({ error: "invalid_market" }, { status: 400 });
   }
+
   try {
-    const q = await getQuote(market, ticker);
-    return NextResponse.json(q);
+    const quote = await getCachedQuote(market, ticker);
+    return NextResponse.json(quote);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg }, { status: 502 });
+    console.error("quote_fetch_failed", msg);
+    return NextResponse.json({ error: "data_source_failed" }, { status: 502 });
   }
 }

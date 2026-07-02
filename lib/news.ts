@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import type { Market } from "@/lib/db";
 
 export type NewsItem = {
   title: string;
@@ -44,7 +45,8 @@ async function fetchRss(url: string): Promise<RssItem[]> {
     },
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`RSS ${url} ${res.status}`);
+  if (!res.ok) throw new Error(`RSS ${res.status}`);
+
   const xml = await res.text();
   const j = parser.parse(xml);
   return asArray<RssItem>(j?.rss?.channel?.item);
@@ -52,9 +54,7 @@ async function fetchRss(url: string): Promise<RssItem[]> {
 
 function normalizeRss(item: RssItem): NewsItem {
   const sourceRaw =
-    typeof item.source === "string"
-      ? item.source
-      : item.source?.["#text"] ?? "";
+    typeof item.source === "string" ? item.source : item.source?.["#text"] ?? "";
   return {
     title: stripHtml(item.title ?? ""),
     link: item.link ?? "",
@@ -65,60 +65,59 @@ function normalizeRss(item: RssItem): NewsItem {
 }
 
 type NewsApiArticle = {
-  source: { name: string };
-  title: string;
-  description: string | null;
-  url: string;
-  publishedAt: string;
+  source?: { name?: string };
+  title?: string;
+  description?: string | null;
+  url?: string;
+  publishedAt?: string;
 };
 
 async function fetchNewsApi(
-  market: "KR" | "US",
+  market: Market,
   ticker: string,
   name: string,
   limit: number
 ): Promise<NewsItem[]> {
   const key = process.env.NEWSAPI_KEY;
-  if (!key || key.startsWith("여기에")) return [];
+  if (!key) return [];
 
-  const query = market === "KR" ? name : ticker;
+  const query = market === "KR" ? name : `${ticker} ${name}`;
   const language = market === "KR" ? "" : "en";
   const url = `https://newsapi.org/v2/everything?qInTitle=${encodeURIComponent(
     query
   )}${language ? `&language=${language}` : ""}&sortBy=publishedAt&pageSize=${limit}`;
+
   const res = await fetch(url, {
     headers: { "X-Api-Key": key },
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`NewsAPI ${res.status}`);
+
   const j = (await res.json()) as { articles?: NewsApiArticle[] };
   return (j.articles ?? []).map((a) => ({
     title: stripHtml(a.title ?? ""),
-    link: a.url,
+    link: a.url ?? "",
     source: a.source?.name ?? "",
-    pubDate: a.publishedAt,
+    pubDate: a.publishedAt ?? "",
     summary: stripHtml(a.description ?? "").slice(0, 300),
   }));
 }
 
 async function fetchGoogleNews(
-  market: "KR" | "US",
+  market: Market,
   ticker: string,
   name: string,
   limit: number
 ): Promise<NewsItem[]> {
-  const url =
-    market === "KR"
-      ? `https://news.google.com/rss/search?q=${encodeURIComponent(name)}&hl=ko&gl=KR&ceid=KR:ko`
-      : `https://news.google.com/rss/search?q=${encodeURIComponent(`${ticker} ${name} stock`)}&hl=en-US&gl=US&ceid=US:en`;
+  const query = market === "KR" ? name : `${ticker} ${name} stock`;
+  const locale =
+    market === "KR" ? "hl=ko&gl=KR&ceid=KR:ko" : "hl=en-US&gl=US&ceid=US:en";
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&${locale}`;
   const items = await fetchRss(url);
   return items.slice(0, limit).map(normalizeRss);
 }
 
-async function fetchYahooFinance(
-  ticker: string,
-  limit: number
-): Promise<NewsItem[]> {
+async function fetchYahooFinance(ticker: string, limit: number): Promise<NewsItem[]> {
   const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(
     ticker
   )}&region=US&lang=en-US`;
@@ -132,13 +131,12 @@ function timeOf(s: string): number {
 }
 
 export async function searchNews(
-  market: "KR" | "US",
+  market: Market,
   ticker: string,
   name: string,
   limit = 8
 ): Promise<NewsItem[]> {
   const half = Math.ceil(limit / 2);
-
   const [fromApi, fromGoogle] = await Promise.all([
     fetchNewsApi(market, ticker, name, half).catch(() => []),
     fetchGoogleNews(market, ticker, name, half).catch(() => []),
@@ -146,23 +144,18 @@ export async function searchNews(
 
   const merged: NewsItem[] = [];
   const seen = new Set<string>();
-  for (const it of [...fromApi, ...fromGoogle]) {
-    if (!it.title || !it.link) continue;
-    if (seen.has(it.title)) continue;
-    seen.add(it.title);
-    merged.push(it);
+  for (const item of [...fromApi, ...fromGoogle]) {
+    if (!item.title || !item.link || seen.has(item.title)) continue;
+    seen.add(item.title);
+    merged.push(item);
   }
 
   if (merged.length < limit && market === "US") {
-    try {
-      const fallback = await fetchYahooFinance(ticker, limit - merged.length);
-      for (const it of fallback) {
-        if (!it.title || !it.link || seen.has(it.title)) continue;
-        seen.add(it.title);
-        merged.push(it);
-      }
-    } catch {
-      // ignore
+    const fallback = await fetchYahooFinance(ticker, limit - merged.length).catch(() => []);
+    for (const item of fallback) {
+      if (!item.title || !item.link || seen.has(item.title)) continue;
+      seen.add(item.title);
+      merged.push(item);
     }
   }
 

@@ -4,8 +4,10 @@ import { db } from "@/lib/db";
 
 const PatchSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
+  quantity: z.coerce.number().min(0).optional(),
+  averageCost: z.coerce.number().min(0).optional(),
+  currency: z.enum(["KRW", "USD"]).optional(),
   note: z.string().max(500).optional().nullable(),
-  tags: z.string().max(200).optional(),
 });
 
 function parseId(id: string) {
@@ -15,7 +17,7 @@ function parseId(id: string) {
 
 export async function PATCH(
   req: NextRequest,
-  ctx: RouteContext<"/api/watchlist/[id]">
+  ctx: RouteContext<"/api/portfolio/[id]">
 ) {
   const { id } = await ctx.params;
   const n = parseId(id);
@@ -29,19 +31,27 @@ export async function PATCH(
     );
   }
 
-  const current = db.prepare("SELECT * FROM watchlist WHERE id = ?").get(n) as
-    | { name: string; note: string | null; tags: string }
+  const current = db.prepare("SELECT * FROM holdings WHERE id = ?").get(n) as
+    | {
+        name: string;
+        quantity: number;
+        average_cost: number;
+        currency: "KRW" | "USD";
+        note: string | null;
+      }
     | undefined;
   if (!current) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   db.prepare(
-    `UPDATE watchlist
-     SET name = ?, note = ?, tags = ?, updated_at = datetime('now')
+    `UPDATE holdings
+     SET name = ?, quantity = ?, average_cost = ?, currency = ?, note = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     parsed.data.name ?? current.name,
+    parsed.data.quantity ?? current.quantity,
+    parsed.data.averageCost ?? current.average_cost,
+    parsed.data.currency ?? current.currency,
     "note" in parsed.data ? parsed.data.note ?? null : current.note,
-    parsed.data.tags ?? current.tags,
     n
   );
   return NextResponse.json({ ok: true });
@@ -49,13 +59,13 @@ export async function PATCH(
 
 export async function DELETE(
   _req: Request,
-  ctx: RouteContext<"/api/watchlist/[id]">
+  ctx: RouteContext<"/api/portfolio/[id]">
 ) {
   const { id } = await ctx.params;
   const n = parseId(id);
   if (!n) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
 
-  const info = db.prepare("DELETE FROM watchlist WHERE id = ?").run(n);
+  const info = db.prepare("DELETE FROM holdings WHERE id = ?").run(n);
   if (info.changes === 0) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

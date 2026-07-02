@@ -1,14 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { getCachedNews } from "@/lib/market-data";
+import { getPriceHistory } from "@/lib/stocks";
 
 const QuerySchema = z.object({
-  name: z.string().trim().max(100).optional(),
+  range: z.enum(["1mo", "3mo", "6mo", "1y"]).default("3mo"),
+  interval: z.enum(["1d"]).default("1d"),
 });
 
 export async function GET(
   req: NextRequest,
-  ctx: RouteContext<"/api/news/[market]/[ticker]">
+  ctx: RouteContext<"/api/chart/[market]/[ticker]">
 ) {
   const { market, ticker } = await ctx.params;
   if (market !== "KR" && market !== "US") {
@@ -16,7 +17,8 @@ export async function GET(
   }
 
   const parsed = QuerySchema.safeParse({
-    name: req.nextUrl.searchParams.get("name") ?? undefined,
+    range: req.nextUrl.searchParams.get("range") ?? undefined,
+    interval: req.nextUrl.searchParams.get("interval") ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json(
@@ -25,13 +27,12 @@ export async function GET(
     );
   }
 
-  const name = parsed.data.name || ticker;
   try {
-    const news = await getCachedNews(market, ticker, name);
-    return NextResponse.json(news);
+    const chart = await getPriceHistory(market, ticker, parsed.data.range, parsed.data.interval);
+    return NextResponse.json(chart);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("news_fetch_failed", msg);
+    console.error("chart_fetch_failed", msg);
     return NextResponse.json({ error: "data_source_failed" }, { status: 502 });
   }
 }
